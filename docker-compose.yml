@@ -1,0 +1,156 @@
+version: "3.9"
+
+# Property Accounting Software — Docker Swarm stack (MySQL + phpMyAdmin)
+# - Replace image tags with your own.
+# - Create the external secrets before deploy.
+
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: property_accounting
+      MYSQL_USER: accounting
+      MYSQL_PASSWORD_FILE: /run/secrets/db_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
+    command: [
+      "mysqld",
+      "--character-set-server=utf8mb4",
+      "--collation-server=utf8mb4_0900_ai_ci",
+      "--default-authentication-plugin=caching_sha2_password",
+      "--innodb_flush_method=O_DIRECT",
+      "--innodb_file_per_table=1"
+    ]
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      placement:
+        constraints:
+          - node.role == worker
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
+        reservations: { cpus: "0.25", memory: 256M }
+    secrets:
+      - db_password
+      - db_root_password
+
+  api:
+    image: accountant-api:latest
+    environment:
+      DB_DRIVER: mysql+pymysql
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: property_accounting
+      DB_USER: accounting
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      SECRET_KEY_FILE: /run/secrets/jwt_secret
+      TEX_ENGINE: xelatex
+      PDF_OUTPUT_DIR: /data/pdfs
+    volumes:
+      - pdf_data:/data/pdfs
+      - latex_cache:/tmp/texcache
+    networks:
+      - internal
+      - public
+    ports:
+      - target: 8000
+        published: 8000
+        protocol: tcp
+        mode: ingress
+    depends_on:
+      - db
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        order: start-first
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+      resources:
+        limits: { cpus: "1.5", memory: 2G }
+        reservations: { cpus: "0.25", memory: 512M }
+    secrets:
+      - db_password
+      - jwt_secret
+
+  web:
+    image: accountant-web:latest
+    environment:
+      API_BASE_URL: http://api:8000
+    networks:
+      - internal
+      - public
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: ingress
+    depends_on:
+      - api
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 2
+        order: start-first
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
+        reservations: { cpus: "0.1", memory: 128M }
+
+  phpmyadmin:
+    image: phpmyadmin:5.2
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: accounting
+      PMA_PASSWORD_FILE: /run/secrets/db_password
+    networks:
+      - internal
+      - public
+    ports:
+      - target: 80
+        published: 8081
+        protocol: tcp
+        mode: ingress
+    depends_on:
+      - db
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits: { cpus: "0.5", memory: 512M }
+        reservations: { cpus: "0.1", memory: 128M }
+    secrets:
+      - db_password
+
+networks:
+  public:
+    driver: overlay
+    attachable: true
+  internal:
+    driver: overlay
+    attachable: true
+    internal: true
+
+volumes:
+  mysql_data:
+  pdf_data:
+  latex_cache:
+
+secrets:
+  db_password:
+    external: true
+  db_root_password:
+    external: true
+  jwt_secret:
+    external: true

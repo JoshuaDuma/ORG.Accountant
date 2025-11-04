@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Create app directory
+WORKDIR /app
+
+# System deps (optional but useful for many libs); remove if not needed
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install Python deps first (better caching)
+# If you use pyproject.toml instead, see the alt version below.
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+# Copy source
+COPY . .
+
+# (Optional) run as non-root
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+# FastAPI typically runs on 8000 with uvicorn
+EXPOSE 8000
+
+# Start the server
+# Change "app.main:app" to your module:variable if different
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
